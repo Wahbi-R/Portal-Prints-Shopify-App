@@ -1,0 +1,301 @@
+<div>
+    <div id="protected-content" style="display:none;">
+      <h3>Welcome to your dashboard!</h3>
+    </div>
+    <div id="product-list-container" class="product-list-container"></div>
+</div>
+
+<!-- Popup for product details with an overlay -->
+<div id="popup-overlay" class="popup-overlay" style="display: none;">
+  <div id="product-popup" class="product-popup" style="display: none;">
+    <div class="popup-content">
+      <span class="close-btn">&times;</span> <!-- Close button -->
+      <div id="loading-indicator" style="display: none;">Loading...</div> <!-- Loading indicator -->
+      <div id="product-details"></div> <!-- Product details will go here -->
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+  import { getFirestore, collection, getDocs, doc, getDoc, collectionGroup } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+  import axios from "https://cdn.skypack.dev/axios";
+
+  // Initialize Firebase Auth and Firestore
+  const auth = getAuth();
+  const db = getFirestore();
+
+  // Elements
+  const productListContainer = document.getElementById('product-list-container');
+  const productPopup = document.getElementById('product-popup');
+  const productDetails = document.getElementById('product-details');
+  const loadingIndicator = document.getElementById('loading-indicator');
+  const closeBtn = document.querySelector('.close-btn');
+  const popupOverlay = document.getElementById('popup-overlay');
+
+  // Close the popup when the close button is clicked or when clicking outside the popup
+  closeBtn.addEventListener('click', closePopup);
+  popupOverlay.addEventListener('click', (event) => {
+    if (event.target === popupOverlay) {
+      closePopup();
+    }
+  });
+
+  function closePopup() {
+    popupOverlay.style.display = 'none';
+    productDetails.innerHTML = ''; // Clear the product details
+    loadingIndicator.style.display = 'none'; // Hide the loading indicator
+  }
+
+  // Show the products if the user is logged in and has shops
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      const userId = user.uid;
+
+      // Check if user is a master account
+      const userRef = doc(db, 'shops', userId);
+      const userSnapshot = await getDoc(userRef);
+
+      let shopsRef;
+      if (userSnapshot.exists() && userSnapshot.data().role === 'master') {
+        // Master account: Fetch all shops across all users using collectionGroup
+        shopsRef = collectionGroup(db, 'shops');
+      } else {
+        // Regular user: Fetch only their own shops
+        shopsRef = collection(db, "shops", userId, "shops", "shopify", "shops");
+      }
+
+      const shopsSnapshot = await getDocs(shopsRef);
+
+      if (shopsSnapshot.empty) {
+        productListContainer.innerHTML = 'No Shopify shops linked.';
+      } else {
+        productListContainer.innerHTML = '';  // Clear previous content
+
+        // Loop through each shop and fetch its products
+        shopsSnapshot.forEach(async (shopDoc) => {
+          const shopDomain = shopDoc.id;
+          const accessToken = shopDoc.data().accessToken;
+
+          // Send a request to your Firebase Function to fetch the products
+          const response = await axios.post('https://shopifyproducts-uqj2m2m4oa-uc.a.run.app', { shopDomain, accessToken });
+          const products = response.data;
+
+          // Create a section for the shop
+          const shopSection = document.createElement('div');
+
+          // Create a heading for the shop domain (shopHeading) and append it outside the flex container
+          const shopHeading = document.createElement('h3');
+          shopHeading.textContent = `Shop Domain: ${shopDomain}`;
+          shopSection.appendChild(shopHeading);
+
+          // Create a flex container for the product cards
+          const productCardsContainer = document.createElement('div');
+
+          // Apply flexbox to the product cards container only
+          productCardsContainer.style.display = 'flex';
+          productCardsContainer.style.flexWrap = 'wrap';  // Allow product cards to wrap
+          productCardsContainer.style.gap = '20px';  // Space between the product cards
+          productCardsContainer.style.marginBottom = '40px';  // Space between shop sections
+
+          // Loop through each product and create product cards
+          products.forEach(product => {
+            const card = document.createElement('div');
+            card.classList.add('product-card');
+
+            const img = document.createElement('img');
+            img.src = product.media.edges[0]?.node?.image?.src || 'https://via.placeholder.com/150';
+            img.alt = product.title;
+            card.appendChild(img);
+
+            const title = document.createElement('h4');
+            title.textContent = product.title;
+            card.appendChild(title);
+
+            // Add click event to open popup and create tabs for all variants
+            card.addEventListener('click', async () => {
+              popupOverlay.style.display = 'block';  // Show overlay and popup
+              productPopup.style.display = 'block';
+              loadingIndicator.style.display = 'block';  // Show loading indicator
+
+              // Check if the product has variants and if the edges array is available
+              if (!product.variants || !product.variants.edges || product.variants.edges.length === 0) {
+                  productDetails.innerHTML = `
+                  <h2>${product.title}</h2>
+                  <p>No variants available for this product.</p>
+                  `;
+                  loadingIndicator.style.display = 'none';
+                  return;
+              }
+
+              // Create tabs for all variants
+              let tabs = '';
+              product.variants.edges.forEach((variant, index) => {
+                  const variantTitle = variant.node?.title || `Variant ${index + 1}`;
+                  tabs += `<button class="tablink" data-index="${index}" style="padding: 10px;">${variantTitle}</button>`;
+              });
+
+              // Populate the popup with product title, variants tabs, and product image
+              let popupContent = `
+                  <h2>${product.title}</h2>
+                  <img src="${product.media.edges[0]?.node?.image?.src || 'https://via.placeholder.com/150'}" alt="${product.title}">
+                  <div id="tabs-container">
+                  ${tabs}
+                  </div>
+                  <div id="variant-content" style="margin-top: 20px;">Select a variant to view its details.</div>
+              `;
+
+              productDetails.innerHTML = popupContent;
+              loadingIndicator.style.display = 'none';  // Hide loading indicator
+
+              // Add click event listeners to each tab
+              const tabButtons = document.querySelectorAll('.tablink');  // Define tabButtons after the content is injected into DOM
+              tabButtons.forEach(tabButton => {
+                  tabButton.addEventListener('click', async (event) => {
+                      const selectedIndex = event.target.getAttribute('data-index');
+                      const selectedVariant = product.variants.edges[selectedIndex];
+                      const variantId = selectedVariant.node.id;
+
+                      // Display selected variant title in variant-content div
+                      document.getElementById('variant-content').innerHTML = `
+                      <h3>Selected Variant: ${selectedVariant.node.title}</h3>
+                      <p>Fetching orders for this variant...</p>
+                      `;
+
+                      try {
+                          const ordersResponse = await axios.post('https://shopifyordersbyvariant-uqj2m2m4oa-uc.a.run.app', {
+                              shopDomain: shopDomain,
+                              accessToken: accessToken,
+                              variantId: variantId,
+                          });
+
+                          const orders = ordersResponse.data;
+
+                          // Generate the list of orders
+                          let ordersHtml = `<ul>`;
+                            orders.forEach(order => {
+                            let name = '';
+                            let address = '';
+
+                            // Conditionally add Name if both firstName and lastName are not empty
+                            if (order.shippingAddress?.firstName || order.shippingAddress?.lastName) {
+                                name = `<strong>Name:</strong> ${order.shippingAddress.firstName || ''} ${order.shippingAddress.lastName || ''}<br>`;
+                            }
+
+                            // Conditionally add Address fields if they are not empty
+                            if (order.shippingAddress?.address1 || order.shippingAddress?.address2 || order.shippingAddress?.city || order.shippingAddress?.country || order.shippingAddress?.zip) {
+                                address = `<strong>Shipping Address:</strong> 
+                                        ${order.shippingAddress?.address1 || ''}, 
+                                        ${order.shippingAddress?.address2 || ''}, 
+                                        ${order.shippingAddress?.city || ''}, 
+                                        ${order.shippingAddress?.country || ''}, 
+                                        ${order.shippingAddress?.zip || ''}<br>`;
+                            }
+
+                            // Extract the numeric part of the Order ID
+                            const orderId = order.id.split('/').pop();
+
+                            ordersHtml += `
+                                <li>
+                                <strong>Order ID:</strong> ${orderId} <br>
+                                <strong>Fulfillment Status:</strong> ${order.displayFulfillmentStatus} <br>
+                                ${name}  <!-- Name is added here only if not empty -->
+                                ${address}  <!-- Address is added here only if not empty -->
+                                </li><br>`;
+                            });
+                            ordersHtml += `</ul>`;
+
+                          // Display orders in the variant-content div
+                          document.getElementById('variant-content').innerHTML = ordersHtml;
+
+                      } catch (error) {
+                          document.getElementById('variant-content').innerHTML = 'Error fetching orders.';
+                          console.error('Error fetching orders:', error);
+                      }
+                  });
+              });
+            });
+
+            productCardsContainer.appendChild(card);  // Append the card to the product cards container
+          });
+
+          shopSection.appendChild(productCardsContainer);  // Append the product cards container to the shop section
+          productListContainer.appendChild(shopSection);  // Append the shop section to the main container
+        });
+      }
+    } else {
+      productListContainer.innerHTML = 'User is not logged in.';
+    }
+  });
+</script>
+
+<!-- Styling for the product cards, popup, and overlay -->
+<style>
+  .product-list-container {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    margin-top: 20px;
+    width: 100%;
+  }
+
+  .product-card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 16px;
+    width: 200px;
+    text-align: center;
+    background-color: #f9f9f9;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin: 10px;
+    cursor: pointer;
+    color: #333;
+  }
+  .popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.5);  /* Dark overlay background */
+  z-index: 1000;
+}
+
+.product-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);  /* Center the popup in the middle of the screen */
+  background-color: #fff;
+  padding: 20px;
+  max-width: 600px;
+  width: 80%;
+  max-height: 80vh;  /* Ensure the popup doesn't exceed 80% of the viewport height */
+  overflow-y: auto;  /* Enable scrolling inside the popup if needed */
+  border-radius: 8px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);  /* Add a shadow to make it stand out */
+  z-index: 1001;
+  position: relative;
+}
+
+.popup-content {
+  max-height: 70vh;  /* Constrain the height of the popup content */
+  overflow-y: auto;  /* Make the content scrollable */
+}
+
+.close-btn {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  cursor: pointer;
+  font-size: 24px;
+  color: #333;
+  z-index: 1002;  /* Ensure it's always on top of the content */
+}
+
+h3 {
+  font-size: 24px;
+  margin-bottom: 20px;
+  color: #333;
+}
+</style>
