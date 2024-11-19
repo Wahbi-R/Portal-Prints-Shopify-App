@@ -42,9 +42,7 @@ export default function Index() {
 
   return (
     <div>
-      <h1>Welcome to Portal Prints</h1>
-      <p>Shop Domain: {shop || "Loading..."}</p>
-      <p>Access Token: {accessToken || "No Access Token Found"}</p>
+      <h1>Welcome to Portal Prints Shopify app!</h1>
       {shop && (
         <iframe
           src={`https://merchant.portalprints.com/shopify?shop=${shop}&accessToken=${accessToken}`}
